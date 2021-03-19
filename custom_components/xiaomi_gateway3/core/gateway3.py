@@ -13,7 +13,7 @@ from . import bluetooth, utils
 from .mini_miio import SyncmiIO
 from .shell import TelnetShell, ntp_time
 from .unqlite import Unqlite, SQLite
-from .utils import GLOBAL_PROP
+from .utils import GLOBAL_PROP, DEVICES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -343,15 +343,21 @@ class Gateway3(Thread, GatewayMesh, GatewayStats):
 
         self.host = host
         self.options = options
+        self.model = utils.get_gateway_model(
+            str(options.get('device_name', '')))
 
-        self.miio = SyncmiIO(host, token)
+        if 'lumi.gateway.mgl03' in self.model:
+            self.miio = SyncmiIO(host, token)
 
         self.mqtt = Client()
         self.mqtt.on_connect = self.on_connect
         self.mqtt.on_disconnect = self.on_disconnect
         self.mqtt.on_message = self.on_message
 
-        self._ble = options.get('ble', True)  # for fast access
+        if 'lumi.gateway.mgl03' in self.model:
+            self._ble = options.get('ble', True)  # for fast access
+        else:
+            self._ble = False
         self._debug = options.get('debug', '')  # for fast access
         self.parent_scan_interval = options.get('parent', -1)
         self.default_devices = config['devices'] if config else None
@@ -442,7 +448,8 @@ class Gateway3(Thread, GatewayMesh, GatewayStats):
     def _enable_telnet(self):
         """Enable telnet with miio protocol."""
         raw = json.loads(self.telnet_cmd)
-        if self.miio.send(raw['method'], raw.get('params')) != 'ok':
+        if 'lumi.gateway.mgl03' in self.model and self.miio.send(
+                raw['method'], raw.get('params')) != 'ok':
             self.debug(f"Can't enable telnet")
             return False
         return True
@@ -453,7 +460,13 @@ class Gateway3(Thread, GatewayMesh, GatewayStats):
         """
         self.debug("Prepare Gateway")
         try:
-            shell = TelnetShell(self.host)
+            password = self.options.get('password')
+            device_name = self.options.get('device_name')
+            shell = TelnetShell(self.host, password, device_name)
+            if self.model == 'lumi.camera.gwagl02':
+                raw = shell.read_file('/etc/fw_info.ini')
+                m = re.compile(r'version = ([0-9._]+)').search(raw.decode())
+                shell.ver = m[1]
             self.debug(f"Version: {shell.ver}")
 
             ps = shell.get_running_ps()
@@ -483,49 +496,50 @@ class Gateway3(Thread, GatewayMesh, GatewayStats):
                 self.debug("Run fixed BT")
                 shell.run_bt()
 
-            if "-t log/miio" not in ps:
-                # all data or only necessary events
-                pattern = (
-                    '\\{"' if 'miio' in self._debug else
-                    "ot_agent_recv_handler_one.+"
-                    "ble_event|properties_changed|heartbeat"
-                )
-                self.debug(f"Redirect miio to MQTT")
-                shell.redirect_miio2mqtt(pattern)
+            if self.model == 'lumi.gateway.mgl03':
+                if "-t log/miio" not in ps:
+                    # all data or only necessary events
+                    pattern = (
+                        '\\{"' if 'miio' in self._debug else
+                        "ot_agent_recv_handler_one.+"
+                        "ble_event|properties_changed|heartbeat"
+                    )
+                    self.debug(f"Redirect miio to MQTT")
+                    shell.redirect_miio2mqtt(pattern)
 
-            if self.options.get('buzzer'):
-                if "dummy:basic_gw" not in ps:
-                    self.debug("Disable buzzer")
-                    shell.stop_buzzer()
-            else:
-                if "dummy:basic_gw" in ps:
-                    self.debug("Enable buzzer")
-                    shell.run_buzzer()
+                if self.options.get('buzzer'):
+                    if "dummy:basic_gw" not in ps:
+                        self.debug("Disable buzzer")
+                        shell.stop_buzzer()
+                else:
+                    if "dummy:basic_gw" in ps:
+                        self.debug("Enable buzzer")
+                        shell.run_buzzer()
 
-            if self.options.get('zha'):
-                if "Lumi_Z3GatewayHost_MQTT" in ps:
-                    self.debug("Stop Lumi Zigbee")
-                    shell.stop_lumi_zigbee()
+                if self.options.get('zha'):
+                    if "Lumi_Z3GatewayHost_MQTT" in ps:
+                        self.debug("Stop Lumi Zigbee")
+                        shell.stop_lumi_zigbee()
 
-                if "tcp-l:8888" not in ps:
-                    if "Received" in shell.check_or_download_socat():
-                        self.debug("Download socat")
-                    self.debug("Run Zigbee TCP")
-                    shell.run_zigbee_tcp()
+                    if "tcp-l:8888" not in ps:
+                        if "Received" in shell.check_or_download_socat():
+                            self.debug("Download socat")
+                        self.debug("Run Zigbee TCP")
+                        shell.run_zigbee_tcp()
 
-            else:
-                if "tcp-l:8888" in ps:
-                    self.debug("Stop Zigbee TCP")
-                    shell.stop_zigbee_tcp()
+                else:
+                    if "tcp-l:8888" in ps:
+                        self.debug("Stop Zigbee TCP")
+                        shell.stop_zigbee_tcp()
 
-                if (self.parent_scan_interval >= 0 and
-                        "Lumi_Z3GatewayHost_MQTT -n 1 -b 115200 -l" not in ps):
-                    self.debug("Run public Zigbee console")
-                    shell.run_public_zb_console()
+                    if (self.parent_scan_interval >= 0 and
+                            "Lumi_Z3GatewayHost_MQTT -n 1 -b 115200 -l" not in ps):
+                        self.debug("Run public Zigbee console")
+                        shell.run_public_zb_console()
 
-                elif "Lumi_Z3GatewayHost_MQTT" not in ps:
-                    self.debug("Run Lumi Zigbee")
-                    shell.run_lumi_zigbee()
+                    elif "Lumi_Z3GatewayHost_MQTT" not in ps:
+                        self.debug("Run Lumi Zigbee")
+                        shell.run_lumi_zigbee()
 
             shell.close()
 
@@ -551,11 +565,18 @@ class Gateway3(Thread, GatewayMesh, GatewayStats):
             shell = TelnetShell(self.host)
 
             # 1. Read coordinator info
-            raw = shell.read_file('/data/zigbee/coordinator.info')
+            if self.model == 'lumi.camera.gwagl02':
+                zb_coordinator = '/mnt/config/zigbee/coordinator.info'
+                firmware_lock = False
+            else:
+                zb_coordinator = '/data/zigbee/coordinator.info'
+                firmware_lock = shell.check_firmware_lock()
+    
+            raw = shell.read_file(zb_coordinator)
             device = json.loads(raw)
             devices = [{
                 'did': shell.get_did(),
-                'model': 'lumi.gateway.mgl03',
+                'model': self.model,
                 'mac': device['mac'],
                 'wlan_mac': shell.get_wlan_mac(),
                 'type': 'gateway',
@@ -566,63 +587,94 @@ class Gateway3(Thread, GatewayMesh, GatewayStats):
 
             # 2. Read zigbee devices
             if not self.options.get('zha'):
-                # read Silicon devices DB
-                nwks = {}
-                try:
-                    raw = shell.read_file(
-                        '/data/silicon_zigbee_host/devices.txt')
-                    raw = raw.decode().split(' ')
-                    for i in range(0, len(raw) - 1, 32):
-                        ieee = reversed(raw[i + 3:i + 11])
-                        ieee = ''.join(f"{i:>02s}" for i in ieee)
-                        nwks[ieee] = f"{raw[i]:>04s}"
-                except:
-                    _LOGGER.exception("Can't read Silicon devices DB")
+                if self.model == 'lumi.gateway.mgl03':
+                    # read Silicon devices DB
+                    nwks = {}
+                    try:
+                        raw = shell.read_file(
+                            '/data/silicon_zigbee_host/devices.txt')
+                        raw = raw.decode().split(' ')
+                        for i in range(0, len(raw) - 1, 32):
+                            ieee = reversed(raw[i + 3:i + 11])
+                            ieee = ''.join(f"{i:>02s}" for i in ieee)
+                            nwks[ieee] = f"{raw[i]:>04s}"
+                    except:
+                        _LOGGER.exception("Can't read Silicon devices DB")
 
-                # read Xiaomi devices DB
-                raw = shell.read_file(shell.zigbee_db, as_base64=True)
-                # self.debug(f"Devices RAW: {raw}")
-                if raw.startswith(b'unqlite'):
-                    db = Unqlite(raw)
-                    data = db.read_all()
+                    # read Xiaomi devices DB
+                    raw = shell.read_file(shell.zigbee_db, as_base64=True)
+                    # self.debug(f"Devices RAW: {raw}")
+                    if raw.startswith(b'unqlite'):
+                        db = Unqlite(raw)
+                        data = db.read_all()
+                    else:
+                        raw = re.sub(br'}\s*{', b',', raw)
+                        data = json.loads(raw)
+
+                    # data = {} or data = {'dev_list': 'null'}
+                    dev_list = json.loads(data.get('dev_list', 'null')) or []
+
+                    for did in dev_list:
+                        model = data[did + '.model']
+                        desc = utils.get_device(model)
+
+                        # skip unknown model
+                        if desc is None:
+                            self.debug(f"{did} has an unsupported modell: {model}")
+                            continue
+
+                        retain = json.loads(data[did + '.prop'])['props']
+                        self.debug(f"{did} {model} retain: {retain}")
+
+                        params = {
+                            p[2]: retain.get(p[1])
+                            for p in (desc['params'] or desc['mi_spec'])
+                            if p[1] is not None
+                        }
+
+                        ieee = f"{data[did + '.mac']:>016s}"
+                        device = {
+                            'did': did,
+                            'mac': '0x' + data[did + '.mac'],
+                            'ieee': ieee,
+                            'nwk': nwks.get(ieee),
+                            'model': data[did + '.model'],
+                            'type': 'zigbee',
+                            'fw_ver': retain.get('fw_ver'),
+                            'init': utils.fix_xiaomi_props(params),
+                            'online': retain.get('alive', 1) == 1
+                        }
+                        devices.append(device)
                 else:
-                    raw = re.sub(br'}\s*{', b',', raw)
-                    data = json.loads(raw)
+                    if self.model == 'lumi.camera.gwagl02':
+                        raw = shell.read_file('/mnt/config/zigbee/device.info')
+                        value = json.loads(raw)
+                        dev_info = value.get("devInfo", 'null') or []
+                    else:
+                        raw = shell.read_file('/data/zigbee/device.info')
+                        value = json.loads(raw)
+                        dev_info = value.get("devInfo", 'null') or []
 
-                # data = {} or data = {'dev_list': 'null'}
-                dev_list = json.loads(data.get('dev_list', 'null')) or []
-
-                for did in dev_list:
-                    model = data[did + '.model']
-                    desc = utils.get_device(model)
-
-                    # skip unknown model
-                    if desc is None:
-                        self.debug(f"{did} has an unsupported modell: {model}")
-                        continue
-
-                    retain = json.loads(data[did + '.prop'])['props']
-                    self.debug(f"{did} {model} retain: {retain}")
-
-                    params = {
-                        p[2]: retain.get(p[1])
-                        for p in (desc['params'] or desc['mi_spec'])
-                        if p[1] is not None
-                    }
-
-                    ieee = f"{data[did + '.mac']:>016s}"
-                    device = {
-                        'did': did,
-                        'mac': '0x' + data[did + '.mac'],
-                        'ieee': ieee,
-                        'nwk': nwks.get(ieee),
-                        'model': data[did + '.model'],
-                        'type': 'zigbee',
-                        'fw_ver': retain.get('fw_ver'),
-                        'init': utils.fix_xiaomi_props(params),
-                        'online': retain.get('alive', 1) == 1
-                    }
-                    devices.append(device)
+                    for dev in dev_info:
+                        model = dev['model']
+                        desc = utils.get_device(model)
+                        # skip unknown model
+                        if desc is None:
+                            self.debug("{} has an unsupported modell: {}".format(
+                                dev['did'], model
+                            ))
+                            continue
+                        device = {
+                            'coordinator': 'lumi.0',
+                            'did': dev['did'],
+                            'mac': dev['mac'],
+                            'model': dev['model'],
+                            'type': 'zigbee',
+                            'zb_ver': dev.get('zb_ver', "1.2"),
+                            'model_ver': dev['model_ver'],
+                            'status': dev['status']
+                        }
+                        devices.append(device)
 
             # 3. Read bluetooth devices
             if self._ble:
@@ -1197,6 +1249,38 @@ def check_mgl03(host: str, token: str, telnet_cmd: Optional[str]) \
     except:
         return 'wrong_telnet'
 
+def is_aqaragateway(host: str, password: str, device_name: str) -> Optional[dict]:
+    results = {}
+    results['status'] = 'error'
+    if host is not None:
+        try:
+            socket.inet_aton(host)
+            if device_name and 'g2h' in device_name:
+                shell = TelnetShell(host, password, device_name)
+                raw = str(shell.read_file('/etc/build.prop'))
+                data = re.search(r"ro\.sys\.name=([a-zA-Z0-9.-]+).+", raw)
+                name = data.group(1) if data else ''
+                data = re.search(r"ro\.sys\.model=([a-zA-Z0-9.-]+).+", raw)
+                model = data.group(1) if data else ''
+                raw = str(shell.read_file('/mnt/config/miio/device.conf'))
+                data = re.search(r"mac=([a-zA-Z0-9:]+).+", raw)
+                mac = data.group(1) if data else ''
+            else:
+                shell = TelnetShell(host)
+                model = shell.get_prop("persist.sys.model")
+                name = shell.get_prop("ro.sys.name")
+                mac = shell.get_prop("persist.sys.miio_mac")
+            shell.close()
+
+        except (ConnectionError, EOFError, socket.error):
+            results['status'] = "connection_error"
+            return results
+
+        if model in DEVICES[0]:
+            results['name'] = "{}-{}".format(name, mac[-5:].upper().replace(":", ""))
+            results['model'] = model
+            results['status'] = 'ok'
+    return results
 
 def get_lan_key(device: dict):
     device = SyncmiIO(device['localip'], device['token'])

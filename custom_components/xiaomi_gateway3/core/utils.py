@@ -21,6 +21,12 @@ DOMAIN = 'xiaomi_gateway3'
 # old devices uses params, new devices uses mi_spec
 DEVICES = [{
     'lumi.gateway.mgl03': ["Xiaomi", "Gateway 3", "ZNDMWG03LM"],
+    'lumi.gateway.acn01': ["Aqara", "Gateway M1S", "ZHWG15LM"], # tested
+#    'lumi.gateway.aeu01': ["Aqara", "Gateway M1S", "HM1S-G01"],
+#    'lumi.gateway.iragl01': ["Aqara", "Gateway M2", "ZHWG12LM"],
+#    'lumi.gateway.iragl7': ["Aqara", "Gateway M2", "HM2-G01"],
+    'lumi.gateway.iragl5': ["Aqara", "Gateway M2", "ZHWG12LM"], # tested
+    'lumi.camera.gwagl02': ["Aqara", "Camera Hub G2H", "ZNSXJ12LM"], # tested
     'params': [
         ['8.0.2012', None, 'power_tx', None],
         ['8.0.2024', None, 'channel', None],
@@ -420,6 +426,14 @@ CLUSTERS = {
 }
 
 RE_ZIGBEE_MODEL_TAIL = re.compile(r'\.v\d$')
+
+
+def get_gateway_model(device_name: str) -> Optional[str]:
+    """ return gateway model """
+    for device in DEVICES[0]:
+        if device != 'params' and device_name in DEVICES[0][device][1].lower():
+            return device
+    return 'lumi.gateway.mgl03'
 
 
 def get_device(zigbee_model: str) -> Optional[dict]:

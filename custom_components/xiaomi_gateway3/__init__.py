@@ -69,8 +69,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     # migrate data (also after first setup) to options
     if entry.data:
-        hass.config_entries.async_update_entry(entry, data={},
-                                               options=entry.data)
+        if 'device_name' in entry.data:
+            hass.config_entries.async_update_entry(entry, data=entry.data,
+                                                   options=entry.data)
+        else:
+            hass.config_entries.async_update_entry(entry, data={},
+                                                   options=entry.data)
 
     await _setup_logger(hass)
 
