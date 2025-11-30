@@ -20,6 +20,7 @@ from .hass.entity import XEntity
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [
+    "air_quality",
     "alarm_control_panel",
     "binary_sensor",
     "button",
