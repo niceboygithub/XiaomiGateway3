@@ -73,3 +73,7 @@ class ShellE1(ShellBase):
 
     async def read_silabs_devices(self) -> bytes:
         return await self.read_file("/data/devices.txt")
+
+    async def get_cloud(self) -> str:
+        raw = await self.exec("agetprop persist.sys.cloud")
+        return raw.rstrip()

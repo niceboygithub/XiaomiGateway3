@@ -113,3 +113,10 @@ class ShellMGW(ShellBase):
 
     async def read_silabs_devices(self) -> bytes:
         return await self.read_file("/data/silicon_zigbee_host/devices.txt")
+
+    async def get_cloud(self) -> str:
+        raw = await self.exec("getprop persist.sys.cloud")
+        raw = raw.rstrip()
+        if "miot" not in raw and "aiot" not in raw:
+            raw = "miot"
+        return raw
