@@ -40,7 +40,8 @@ class ShellE1(ShellBase):
             "model": props["model"],
             "token": props["miio_dtoken"].encode().hex(),
             "lan_mac": props.get("lan_mac"),
-            "version": await self.get_version()
+            "version": await self.get_version(),
+            "sn": props["sn"],
         }
 
     async def read_xiaomi_did(self) -> dict[str, str]:
@@ -73,3 +74,7 @@ class ShellE1(ShellBase):
 
     async def read_silabs_devices(self) -> bytes:
         return await self.read_file("/data/devices.txt")
+
+    async def get_cloud(self) -> str:
+        raw = await self.exec("agetprop persist.sys.cloud")
+        return raw.rstrip()
